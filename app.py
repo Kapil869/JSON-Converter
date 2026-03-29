@@ -29,16 +29,18 @@ def clean_val(val):
 st.title("📦 Logistics JSON Converter")
 st.markdown("Choose your service and upload the Excel file.")
 
-# Sidebar or Radio to separate the two tools completely
+# Sidebar to switch services
 service = st.sidebar.selectbox("Select Service Type", ["TP Filing", "CTM Filing"])
 
-uploaded_file = st.file_uploader(f"Upload Excel for {service}", type="xlsx")
+uploaded_file = st.file_uploader(f"Upload Excel for {service}", type="xlsx", key=f"uploader_{service}")
 
 if uploaded_file:
     try:
         xl = pd.ExcelFile(uploaded_file)
-        sheet = st.selectbox("Select Sheet:", xl.sheet_names)
-        h_row = st.number_input("Header Row Index:", min_value=0, value=2)
+        
+        # Unique key based on service taaki selection sahi se update ho
+        sheet = st.selectbox(f"Select Sheet for {service}:", xl.sheet_names, key=f"sheet_{service}")
+        h_row = st.number_input("Header Row Index:", min_value=0, value=2, key=f"header_{service}")
 
         df = pd.read_excel(uploaded_file, sheet_name=sheet, header=h_row)
         df.columns = df.columns.str.strip()
@@ -59,32 +61,19 @@ if uploaded_file:
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "")
 
                     tp_template = {
-                        "webFormId": "",
-                        "webFormTypeId": "24",
-                        "icegateId": "INDIGOCARGO",
+                        "webFormId": "", "webFormTypeId": "24", "icegateId": "INDIGOCARGO",
                         "thumbPrint": "15 58 d8 6a 4e 61 5a e3 32 2c 5c 78 4a 3e d4 4e 09 0e 6a 76",
-                        "serialNumber": "0a 8e 97 45 d6 5d",
-                        "roleId": 7,
-                        "url": "igm-egm/air-atp",
+                        "serialNumber": "0a 8e 97 45 d6 5d", "roleId": 7, "url": "igm-egm/air-atp",
                         "atsStep1": {
-                            "message_type": "F",
-                            "unique_job_id": clean_id,
+                            "message_type": "F", "unique_job_id": clean_id,
                             "custom_house_code": clean_val(first_row.get('BOND PORT', 'INCCU4')),
-                            "port_destination": "INMAA4",
-                            "transhipment_Agency_Type": "DA", 
-                            "transhipment_Agency_Code": "6E",
-                            "gateway_Custodian_Code": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
-                            "mode_Transport": "A",
-                            "airline_Code": "6E",
-                            "carrier_Code": "AABCI2726B",
+                            "port_destination": "INMAA4", "transhipment_Agency_Type": "DA", 
+                            "transhipment_Agency_Code": "6E", "gateway_Custodian_Code": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
+                            "mode_Transport": "A", "airline_Code": "6E", "carrier_Code": "AABCI2726B",
                             "flight_Number": str(first_row.get('BY AIR FLIGHT NO', '')).replace(" ", "").replace(".0", ""),
-                            "flight_Date": format_date(first_row.get('FLIGHT DATE')),
-                            "bond_Port": clean_val(first_row.get('BOND PORT', 'INCCU4'))
+                            "flight_Date": format_date(first_row.get('FLIGHT DATE')), "bond_Port": clean_val(first_row.get('BOND PORT', 'INCCU4'))
                         },
-                        "atsStep2": {
-                            "lineDetails": [],
-                            "truckDetails": []
-                        }
+                        "atsStep2": { "lineDetails": [], "truckDetails": [] }
                     }
 
                     for _, row in group.iterrows():
@@ -92,15 +81,12 @@ if uploaded_file:
                         tp_template["atsStep2"]["lineDetails"].append({
                             "cargo_Transfer_Manifestno": clean_val(row.get('CTM NO')),
                             "cargo_Transfer_Manifestdate": format_date(row.get('CTM DATE')),
-                            "masterAirway_Bill_Number": mawb,
-                            "houseAirway_Bill_Number": "",
+                            "masterAirway_Bill_Number": mawb, "houseAirway_Bill_Number": "",
                             "consignment_Value_INR": clean_val(row.get('VALUE', 0))
                         })
                         tp_template["atsStep2"]["truckDetails"].append({
-                            "masterAirway_Bill_Number": mawb,
-                            "houseAirway_Bill_Number": "",
-                            "truck_Number": "",
-                            "seal_Number": "",
+                            "masterAirway_Bill_Number": mawb, "houseAirway_Bill_Number": "",
+                            "truck_Number": "", "seal_Number": "",
                             "flight_Number": str(row.get('BY AIR FLIGHT NO', '')).replace(" ", "").replace(".0", ""),
                             "flight_Date": format_date(row.get('FLIGHT DATE'))
                         })
@@ -116,50 +102,44 @@ if uploaded_file:
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "")
 
                     ctm_template = {
-                        "webFormId": "",
-                        "webFormTypeId": "21",
-                        "icegateId": "INDIGOCARGO",
-                        "roleId": 7,
-                        "url": "igm-egm/ctm-webform",
+                        "webFormId": "", "webFormTypeId": "21", "icegateId": "INDIGOCARGO",
+                        "roleId": 7, "url": "igm-egm/ctm-webform",
                         "freshCTMStep1": {
-                            "messageType": "F",
-                            "customsHouseCode": clean_val(first_row.get('BOND PORT', 'INCCU4')),
-                            "fileName": clean_id,
-                            "iGMNumber": clean_val(first_row.get('IGM NO', '')),
-                            "AirlineCode": "6E",
-                            "iGMDate": format_date(first_row.get('IGM DATE')),
-                            "portofDestination": "INMAA4",
-                            "GatewayCustodianCode": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
+                            "messageType": "F", "customsHouseCode": clean_val(first_row.get('BOND PORT', 'INCCU4')),
+                            "fileName": clean_id, "iGMNumber": clean_val(first_row.get('IGM NO', '')),
+                            "AirlineCode": "6E", "iGMDate": format_date(first_row.get('IGM DATE')),
+                            "portofDestination": "INMAA4", "GatewayCustodianCode": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
                             "mode_of_transport": "ACC"
                         },
-                        "freshCTMStep2": {
-                            "line_details": []
-                        }
+                        "freshCTMStep2": { "line_details": [] }
                     }
 
                     for _, row in group.iterrows():
                         mawb = str(row.get('MAWB NO', '')).replace("-", "").replace(" ", "").replace(".0", "")
                         ctm_template["freshCTMStep2"]["line_details"].append({
                             "customsHouseCode": clean_val(row.get('BOND PORT', 'INCCU4')),
-                            "masterAirwayBillNumber": mawb,
-                            "houseAirwayBillNumber": ""
+                            "masterAirwayBillNumber": mawb, "houseAirwayBillNumber": ""
                         })
                     json_files[f"{clean_id}_CTM.json"] = json.dumps(ctm_template, indent=2)
 
             # --- Final ZIP Download ---
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for f_name, content in json_files.items():
-                    zip_file.writestr(f_name, content)
-            
-            st.divider()
-            st.success(f"Successfully processed {len(unique_jobs)} files for {service}.")
-            st.download_button(
-                label=f"📥 DOWNLOAD ALL {service} FILES (ZIP)",
-                data=zip_buffer.getvalue(),
-                file_name=f"{service.replace(' ', '_')}_Export.zip",
-                mime="application/zip"
-            )
+            if json_files:
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for f_name, content in json_files.items():
+                        zip_file.writestr(f_name, content)
+                
+                st.divider()
+                st.success(f"Processing Complete for {service} ({len(unique_jobs)} files).")
+                st.download_button(
+                    label=f"📥 DOWNLOAD {service.upper()} ZIP",
+                    data=zip_buffer.getvalue(),
+                    file_name=f"{service.replace(' ', '_')}_Export.zip",
+                    mime="application/zip",
+                    key=f"dl_btn_{service}"
+                )
+        else:
+            st.warning(f"Column 'JOB NO.' not found in sheet '{sheet}'. Please check header row.")
 
     except Exception as e:
-        st.error(f"Something went wrong: {e}")
+        st.error(f"Error: {e}")
