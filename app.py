@@ -26,7 +26,7 @@ def clean_val(val):
         return str(val).strip()
 
 # --- Main Interface ---
-st.title("📦 JSON Converter for both CTM and TP")
+st.title("📦 Logistics JSON Converter")
 st.markdown("Choose your service and upload the Excel file.")
 
 # Sidebar or Radio to separate the two tools completely
