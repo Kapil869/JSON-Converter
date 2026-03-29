@@ -5,9 +5,10 @@ from datetime import datetime
 import io
 import zipfile
 
-st.set_page_config(page_title="TP JSON Bulk Exporter", layout="wide")
+st.set_page_config(page_title="Final TP JSON Exporter", layout="wide")
 
 def format_date(date_val):
+    
     try:
         if pd.isna(date_val) or str(date_val).strip() == "" or str(date_val).lower() == "nat":
             return ""
@@ -17,15 +18,16 @@ def format_date(date_val):
         return ""
 
 def clean_to_int_string(val):
+    
     if pd.isna(val) or str(val).strip() == "":
         return ""
     try:
+        
         return str(int(float(val)))
     except:
         return str(val).strip()
 
-st.title("📦 Logistics ZIP Generator")
-
+st.title("📦 Logistics ZIP Generator (Verified Version)")
 
 uploaded_file = st.file_uploader("Upload Excel (.xlsx) File", type="xlsx")
 
@@ -52,7 +54,8 @@ if uploaded_file:
                 group = df[df['JOB NO.'] == job_id]
                 first_row = group.iloc[0]
                 
-                clean_job_name = str(job_id).replace("SINGLE ", "").replace(" ", "")
+                # Format job name (e.g., SINGLE TP NO 1 -> TP1)
+                clean_job_id = str(job_id).replace("SINGLE ", "").replace(" ", "")
 
                 template = {
                     "webFormId": "",
@@ -64,7 +67,7 @@ if uploaded_file:
                     "url": "igm-egm/air-atp",
                     "atsStep1": {
                         "message_type": "F",
-                        "unique_job_id": clean_job_name,
+                        "unique_job_id": clean_job_id,
                         "custom_house_code": clean_to_int_string(first_row.get('BOND PORT', 'INCCU4')),
                         "port_destination": "INMAA4",
                         "transhipment_Agency_Type": "DA", 
@@ -86,41 +89,42 @@ if uploaded_file:
                 for _, row in group.iterrows():
                     mawb = str(row.get('MAWB NO', '')).replace("-", "").replace(" ", "").replace(".0", "")
                     
-                    # Line Details (Required fields only)
+                    # lineDetails Mapping
                     template["atsStep2"]["lineDetails"].append({
                         "cargo_Transfer_Manifestno": clean_to_int_string(row.get('CTM NO')),
-                        "cargo_Transfer_Manifest_Date": format_date(row.get('CTM DATE')),
+                        "cargo_Transfer_Manifestdate": format_date(row.get('CTM DATE')),
                         "masterAirway_Bill_Number": mawb,
-                        "value_of_Cargo": float(row.get('VALUE', 0))
+                        "houseAirway_Bill_Number": "",
+                        "consignment_Value_INR": clean_to_int_string(row.get('VALUE', 0))
                     })
                     
-                    # Truck Details (Including truck_Number and seal_Number)
+                    # truckDetails Mapping
                     template["atsStep2"]["truckDetails"].append({
                         "masterAirway_Bill_Number": mawb,
+                        "houseAirway_Bill_Number": "",
                         "truck_Number": "",
                         "seal_Number": "",
                         "flight_Number": str(row.get('BY AIR FLIGHT NO', '')).replace(" ", "").replace(".0", ""),
                         "flight_Date": format_date(row.get('FLIGHT DATE'))
                     })
 
-                json_files[f"{clean_job_name}.json"] = json.dumps(template, indent=2)
+                json_files[f"{clean_job_id}.json"] = json.dumps(template, indent=2)
 
-            # Create ZIP in memory
+            # Create ZIP Archive in memory
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for file_name, content in json_files.items():
                     zip_file.writestr(file_name, content)
             
             st.divider()
-            st.success(f"Successfully processed {len(unique_jobs)} Job(s).")
+            st.success(f"Successfully prepared {len(unique_jobs)} TP file(s).")
             
-            # Single Download Button
             st.download_button(
-                label="📥 DOWNLOAD ALL JSON FILES AS ZIP",
+                label="📥 DOWNLOAD ALL JSON FILES (ZIP)",
                 data=zip_buffer.getvalue(),
-                file_name=f"TP_JSON_Files_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
+                file_name=f"TP_Bulk_Export_{datetime.now().strftime('%Y%m%d')}.zip",
                 mime="application/zip"
             )
 
     except Exception as e:
-        st.error(f"Processing Error: {e}")
+        st.error(f"Something went wrong: {e}")
