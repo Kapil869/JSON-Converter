@@ -5,7 +5,7 @@ import io
 import zipfile
 from datetime import datetime
 
-st.set_page_config(page_title="JSON Converter for CTM and TP", layout="wide")
+st.set_page_config(page_title="Logistics JSON", layout="wide")
 
 # --- Helper Functions ---
 def format_date(date_val):
@@ -28,9 +28,18 @@ def clean_val(val):
     return s
 
 def clean_flight(val):
-    """Removes '+' symbols and extra spaces from flight numbers."""
-    if pd.isna(val): return ""
-    return str(val).replace("+", "").replace(" ", "").replace(".0", "").strip()
+    """Fixes 'inf' issue by forcing string and removing '+' symbols."""
+    if pd.isna(val): 
+        return ""
+    # Convert to string first to avoid 'inf' or scientific notation
+    s = str(val).strip()
+    if s.lower() == "inf":
+        return ""
+    # Removing +, spaces and .0
+    s = s.replace("+", "").replace(" ", "")
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
 
 def format_mawb(val):
     return str(val).replace("-", "").replace(" ", "").replace(".0", "")
@@ -39,13 +48,12 @@ def format_destination(val):
     """Wraps destination with IN and 4 (e.g., DEL -> INDEL4)"""
     dest = str(val).strip().upper()
     if not dest: return ""
-    # Agar pehle se IN ya 4 laga ho toh duplicate na ho uske liye check
     if not dest.startswith("IN"): dest = "IN" + dest
     if not dest.endswith("4"): dest = dest + "4"
     return dest
 
 # --- UI Layout ---
-st.title("📦 JSON Converter CTM & TP")
+st.title("📦 JSON Converter")
 
 service = st.selectbox("What do you want to process?", ["TP Filing", "CTM Filing"], key="main_service")
 uploaded_file = st.file_uploader(f"Upload Excel File", type="xlsx")
@@ -69,7 +77,8 @@ if uploaded_file:
 
         st.info(f"Automatically selected sheet: **{selected_sheet}**")
         
-        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, header=header_idx)
+        # dtype=str added here to prevent 'inf' errors during initial load
+        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, header=header_idx, dtype=str)
         df.columns = df.columns.str.strip()
         df = df.dropna(how='all')
 
@@ -86,7 +95,7 @@ if uploaded_file:
                     first_row = group.iloc[0]
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "").replace(".0", "")
                     
-                    # Fetching from 'BY AIR FLIGHT NO' specifically
+                    # Targeting 'BY AIR FLIGHT NO' strictly
                     flight_no = clean_flight(first_row.get('BY AIR FLIGHT NO', ''))
                     
                     tp_template = {
@@ -133,11 +142,9 @@ if uploaded_file:
                 
                 for (mawb_val, igm_val), group in df.groupby(group_cols):
                     first_row = group.iloc[0]
-                    # Format Destination: DEL -> INDEL4
                     dest_formatted = format_destination(first_row.get('DESTINATION', ''))
                     mawb_clean = format_mawb(mawb_val)
                     
-                    # Simple Filename: CTM1, CTM2...
                     file_name_label = f"CTM{ctm_counter}"
                     
                     ctm_template = {
@@ -167,7 +174,6 @@ if uploaded_file:
                     json_files[f"{file_name_label}.json"] = json.dumps(ctm_template, indent=2)
                     ctm_counter += 1
 
-        # --- Generate ZIP ---
         if json_files:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
