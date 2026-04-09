@@ -5,7 +5,7 @@ import io
 import zipfile
 from datetime import datetime
 
-st.set_page_config(page_title="JSON Converter CTM & TP ", layout="wide")
+st.set_page_config(page_title="JSON Converter for CTM and TP", layout="wide")
 
 # --- Helper Functions ---
 def format_date(date_val):
@@ -30,17 +30,24 @@ def clean_val(val):
 def clean_flight(val):
     """Removes '+' symbols and extra spaces from flight numbers."""
     if pd.isna(val): return ""
-    return str(val).replace("+", "").replace(" ", "").replace(".0", "")
+    return str(val).replace("+", "").replace(" ", "").replace(".0", "").strip()
 
 def format_mawb(val):
     return str(val).replace("-", "").replace(" ", "").replace(".0", "")
 
+def format_destination(val):
+    """Wraps destination with IN and 4 (e.g., DEL -> INDEL4)"""
+    dest = str(val).strip().upper()
+    if not dest: return ""
+    # Agar pehle se IN ya 4 laga ho toh duplicate na ho uske liye check
+    if not dest.startswith("IN"): dest = "IN" + dest
+    if not dest.endswith("4"): dest = dest + "4"
+    return dest
+
 # --- UI Layout ---
-st.title("📦 JSON Converter CTM & TP ")
+st.title("📦 JSON Converter CTM & TP")
 
-# Single Selection for Service
 service = st.selectbox("What do you want to process?", ["TP Filing", "CTM Filing"], key="main_service")
-
 uploaded_file = st.file_uploader(f"Upload Excel File", type="xlsx")
 
 if uploaded_file:
@@ -48,24 +55,20 @@ if uploaded_file:
         xl = pd.ExcelFile(uploaded_file)
         sheet_names = xl.sheet_names
         
-        # Automatic Sheet Selection Logic
         selected_sheet = ""
-        header_idx = 2 # Default
+        header_idx = 2 
         
         if service == "TP Filing":
-            # Search for sheet containing 'TP'
             matches = [s for s in sheet_names if 'TP' in s.upper()]
             selected_sheet = matches[0] if matches else sheet_names[0]
             header_idx = 2
         else:
-            # Search for sheet containing 'CTM'
             matches = [s for s in sheet_names if 'CTM' in s.upper()]
             selected_sheet = matches[0] if matches else sheet_names[0]
             header_idx = 3
 
         st.info(f"Automatically selected sheet: **{selected_sheet}**")
         
-        # Load Data
         df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, header=header_idx)
         df.columns = df.columns.str.strip()
         df = df.dropna(how='all')
@@ -83,6 +86,9 @@ if uploaded_file:
                     first_row = group.iloc[0]
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "").replace(".0", "")
                     
+                    # Fetching from 'BY AIR FLIGHT NO' specifically
+                    flight_no = clean_flight(first_row.get('BY AIR FLIGHT NO', ''))
+                    
                     tp_template = {
                         "webFormId": "", "webFormTypeId": "24", "icegateId": "INDIGOCARGO",
                         "thumbPrint": "15 58 d8 6a 4e 61 5a e3 32 2c 5c 78 4a 3e d4 4e 09 0e 6a 76",
@@ -90,12 +96,12 @@ if uploaded_file:
                         "atsStep1": {
                             "message_type": "F", "unique_job_id": clean_id,
                             "custom_house_code": clean_val(first_row.get('BOND PORT', 'INCCU4')),
-                            "port_destination": str(first_row.get('DEST', '')).strip(), 
+                            "port_destination": format_destination(first_row.get('DEST', '')), 
                             "transhipment_Agency_Type": "DA", 
                             "transhipment_Agency_Code": "6E", 
                             "gateway_Custodian_Code": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
                             "mode_Transport": "A", "airline_Code": "6E", "carrier_Code": "AABCI2726B",
-                            "flight_Number": clean_flight(first_row.get('BY AIR FLIGHT NO', '')),
+                            "flight_Number": flight_no,
                             "flight_Date": format_date(first_row.get('FLIGHT DATE')), "bond_Port": clean_val(first_row.get('BOND PORT', 'INCCU4'))
                         },
                         "atsStep2": { "lineDetails": [], "truckDetails": [] }
@@ -120,7 +126,6 @@ if uploaded_file:
         # CTM FILING LOGIC
         # ---------------------------------------------------------
         elif service == "CTM Filing":
-            # Grouping by both MAWB and IGM to ensure uniqueness
             group_cols = ['MAWB NO', 'IGM']
             if all(col in df.columns for col in group_cols):
                 df['IGM'] = df['IGM'].ffill()
@@ -128,11 +133,12 @@ if uploaded_file:
                 
                 for (mawb_val, igm_val), group in df.groupby(group_cols):
                     first_row = group.iloc[0]
-                    dest = str(first_row.get('DESTINATION', '')).strip()
+                    # Format Destination: DEL -> INDEL4
+                    dest_formatted = format_destination(first_row.get('DESTINATION', ''))
                     mawb_clean = format_mawb(mawb_val)
                     
-                    # Filename: Destination + CTM + Counter
-                    file_name_label = f"{dest}CTM{ctm_counter}"
+                    # Simple Filename: CTM1, CTM2...
+                    file_name_label = f"CTM{ctm_counter}"
                     
                     ctm_template = {
                         "webFormId": "", "webFormTypeId": "21", "icegateId": "INDIGOCARGO",
@@ -144,7 +150,7 @@ if uploaded_file:
                             "iGMNumber": clean_val(igm_val),
                             "AirlineCode": "6E", 
                             "iGMDate": format_date(first_row.get('IGM DATE')),
-                            "portofDestination": dest, 
+                            "portofDestination": dest_formatted, 
                             "GatewayCustodianCode": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
                             "mode_of_transport": "ACC"
                         },
@@ -169,7 +175,7 @@ if uploaded_file:
                     zip_file.writestr(f_name, content)
             
             st.divider()
-            st.success(f"Success! Created {len(json_files)} files.")
+            st.success(f"Success! Generated {len(json_files)} files.")
             st.download_button(
                 label=f"📥 DOWNLOAD {service.upper()} ZIP",
                 data=zip_buffer.getvalue(),
@@ -178,4 +184,4 @@ if uploaded_file:
             )
 
     except Exception as e:
-        st.error(f"Error: {e}. Please check if the header row or column names have changed.")
+        st.error(f"Error: {e}")
