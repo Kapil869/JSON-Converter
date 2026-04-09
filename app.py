@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import json
-from datetime import datetime
 import io
 import zipfile
+from datetime import datetime
 
-st.set_page_config(page_title="JSON Generator for CTM and TP", layout="wide")
+st.set_page_config(page_title="JSON Converter CTM & TP ", layout="wide")
 
 # --- Helper Functions ---
 def format_date(date_val):
@@ -27,49 +27,61 @@ def clean_val(val):
         s = s[:-2]
     return s
 
+def clean_flight(val):
+    """Removes '+' symbols and extra spaces from flight numbers."""
+    if pd.isna(val): return ""
+    return str(val).replace("+", "").replace(" ", "").replace(".0", "")
+
 def format_mawb(val):
-    """Removes dashes and spaces from Airway Bill numbers."""
     return str(val).replace("-", "").replace(" ", "").replace(".0", "")
 
 # --- UI Layout ---
-st.title("📦 JSON Generator for CTM and TP")
-st.sidebar.header("Service Selection")
+st.title("📦 JSON Converter CTM & TP ")
 
-service = st.sidebar.radio("Select Filing Type:", ["TP Filing", "CTM Filing"], key="service_choice")
+# Single Selection for Service
+service = st.selectbox("What do you want to process?", ["TP Filing", "CTM Filing"], key="main_service")
 
-uploaded_file = st.file_uploader(f"Upload Excel File for {service}", type="xlsx", key=f"up_{service}")
+uploaded_file = st.file_uploader(f"Upload Excel File", type="xlsx")
 
 if uploaded_file:
     try:
         xl = pd.ExcelFile(uploaded_file)
+        sheet_names = xl.sheet_names
         
-        col1, col2 = st.columns(2)
-        with col1:
-            sheet = st.selectbox("Select Sheet Name:", xl.sheet_names, key=f"sh_{service}")
-        with col2:
-            h_row = st.number_input("Header Row Index (Manual):", min_value=0, value=2, key=f"hr_{service}")
+        # Automatic Sheet Selection Logic
+        selected_sheet = ""
+        header_idx = 2 # Default
+        
+        if service == "TP Filing":
+            # Search for sheet containing 'TP'
+            matches = [s for s in sheet_names if 'TP' in s.upper()]
+            selected_sheet = matches[0] if matches else sheet_names[0]
+            header_idx = 2
+        else:
+            # Search for sheet containing 'CTM'
+            matches = [s for s in sheet_names if 'CTM' in s.upper()]
+            selected_sheet = matches[0] if matches else sheet_names[0]
+            header_idx = 3
 
-        df = pd.read_excel(uploaded_file, sheet_name=sheet, header=h_row)
+        st.info(f"Automatically selected sheet: **{selected_sheet}**")
+        
+        # Load Data
+        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, header=header_idx)
         df.columns = df.columns.str.strip()
         df = df.dropna(how='all')
 
         json_files = {}
 
         # ---------------------------------------------------------
-        # LOGIC 1: TP FILING (Groups by JOB NO. + Dynamic Destination)
+        # TP FILING LOGIC
         # ---------------------------------------------------------
         if service == "TP Filing":
             job_col = 'JOB NO.' if 'JOB NO.' in df.columns else 'JOB NO. '
-            dest_col = 'DEST' # Column for Port of Destination
-            
             if job_col in df.columns:
                 df[job_col] = df[job_col].ffill()
                 for job_id, group in df.groupby(job_col):
                     first_row = group.iloc[0]
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "").replace(".0", "")
-                    
-                    # FIX: Pick destination from the current row/group instead of hardcoding
-                    port_dest = str(first_row.get(dest_col, 'INMAA4')).strip()
                     
                     tp_template = {
                         "webFormId": "", "webFormTypeId": "24", "icegateId": "INDIGOCARGO",
@@ -78,12 +90,12 @@ if uploaded_file:
                         "atsStep1": {
                             "message_type": "F", "unique_job_id": clean_id,
                             "custom_house_code": clean_val(first_row.get('BOND PORT', 'INCCU4')),
-                            "port_destination": port_dest, 
+                            "port_destination": str(first_row.get('DEST', '')).strip(), 
                             "transhipment_Agency_Type": "DA", 
                             "transhipment_Agency_Code": "6E", 
                             "gateway_Custodian_Code": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
                             "mode_Transport": "A", "airline_Code": "6E", "carrier_Code": "AABCI2726B",
-                            "flight_Number": str(first_row.get('BY AIR FLIGHT NO', '')).replace(" ", "").replace(".0", ""),
+                            "flight_Number": clean_flight(first_row.get('BY AIR FLIGHT NO', '')),
                             "flight_Date": format_date(first_row.get('FLIGHT DATE')), "bond_Port": clean_val(first_row.get('BOND PORT', 'INCCU4'))
                         },
                         "atsStep2": { "lineDetails": [], "truckDetails": [] }
@@ -99,26 +111,28 @@ if uploaded_file:
                         tp_template["atsStep2"]["truckDetails"].append({
                             "masterAirway_Bill_Number": mawb, "houseAirway_Bill_Number": "",
                             "truck_Number": "", "seal_Number": "",
-                            "flight_Number": str(row.get('BY AIR FLIGHT NO', '')).replace(" ", "").replace(".0", ""),
+                            "flight_Number": clean_flight(row.get('BY AIR FLIGHT NO', '')),
                             "flight_Date": format_date(row.get('FLIGHT DATE'))
                         })
                     json_files[f"{clean_id}_TP.json"] = json.dumps(tp_template, indent=2)
 
         # ---------------------------------------------------------
-        # LOGIC 2: CTM FILING (Groups by MAWB NO - Individual Files)
+        # CTM FILING LOGIC
         # ---------------------------------------------------------
         elif service == "CTM Filing":
-            dest_col_ctm = 'DESTINATION'
-            mawb_col = 'MAWB NO'
-            
-            if mawb_col in df.columns:
-                # Grouping by MAWB to ensure every MAWB gets its own single file
-                for mawb_raw, group in df.groupby(mawb_col):
+            # Grouping by both MAWB and IGM to ensure uniqueness
+            group_cols = ['MAWB NO', 'IGM']
+            if all(col in df.columns for col in group_cols):
+                df['IGM'] = df['IGM'].ffill()
+                ctm_counter = 1
+                
+                for (mawb_val, igm_val), group in df.groupby(group_cols):
                     first_row = group.iloc[0]
-                    mawb_clean = format_mawb(mawb_raw)
+                    dest = str(first_row.get('DESTINATION', '')).strip()
+                    mawb_clean = format_mawb(mawb_val)
                     
-                    # FIX: Pick destination from the current row
-                    port_dest = str(first_row.get(dest_col_ctm, 'INMAA4')).strip()
+                    # Filename: Destination + CTM + Counter
+                    file_name_label = f"{dest}CTM{ctm_counter}"
                     
                     ctm_template = {
                         "webFormId": "", "webFormTypeId": "21", "icegateId": "INDIGOCARGO",
@@ -126,11 +140,11 @@ if uploaded_file:
                         "freshCTMStep1": {
                             "messageType": "F", 
                             "customsHouseCode": clean_val(first_row.get('BOND PORT', 'INCCU4')),
-                            "fileName": f"CTM_{mawb_clean}", 
-                            "iGMNumber": clean_val(first_row.get('IGM', '')),
+                            "fileName": file_name_label, 
+                            "iGMNumber": clean_val(igm_val),
                             "AirlineCode": "6E", 
                             "iGMDate": format_date(first_row.get('IGM DATE')),
-                            "portofDestination": port_dest, 
+                            "portofDestination": dest, 
                             "GatewayCustodianCode": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
                             "mode_of_transport": "ACC"
                         },
@@ -144,9 +158,10 @@ if uploaded_file:
                             ]
                         }
                     }
-                    json_files[f"MAWB_{mawb_clean}_CTM.json"] = json.dumps(ctm_template, indent=2)
+                    json_files[f"{file_name_label}.json"] = json.dumps(ctm_template, indent=2)
+                    ctm_counter += 1
 
-        # --- Bulk Download ZIP ---
+        # --- Generate ZIP ---
         if json_files:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -154,16 +169,13 @@ if uploaded_file:
                     zip_file.writestr(f_name, content)
             
             st.divider()
-            st.success(f"Generated {len(json_files)} unique file(s) for {service}.")
+            st.success(f"Success! Created {len(json_files)} files.")
             st.download_button(
                 label=f"📥 DOWNLOAD {service.upper()} ZIP",
                 data=zip_buffer.getvalue(),
-                file_name=f"{service.replace(' ', '_')}_Export.zip",
-                mime="application/zip",
-                key=f"dl_final_{service}"
+                file_name=f"{service.replace(' ', '_')}.zip",
+                mime="application/zip"
             )
-        else:
-            st.error("Required columns not found. Check Header Index.")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error: {e}. Please check if the header row or column names have changed.")
