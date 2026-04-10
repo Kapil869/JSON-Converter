@@ -28,14 +28,11 @@ def clean_val(val):
     return s
 
 def clean_flight(val):
-    """Fixes 'inf' issue by forcing string and removing '+' symbols."""
     if pd.isna(val): 
         return ""
-    # Convert to string first to avoid 'inf' or scientific notation
     s = str(val).strip()
     if s.lower() == "inf":
         return ""
-    # Removing +, spaces and .0
     s = s.replace("+", "").replace(" ", "")
     if s.endswith(".0"):
         s = s[:-2]
@@ -45,7 +42,6 @@ def format_mawb(val):
     return str(val).replace("-", "").replace(" ", "").replace(".0", "")
 
 def format_destination(val):
-    """Wraps destination with IN and 4 (e.g., DEL -> INDEL4)"""
     dest = str(val).strip().upper()
     if not dest: return ""
     if not dest.startswith("IN"): dest = "IN" + dest
@@ -53,7 +49,7 @@ def format_destination(val):
     return dest
 
 # --- UI Layout ---
-st.title("📦 JSON Converter")
+st.title("📦 JSON Converter CTM TP ")
 
 service = st.selectbox("What do you want to process?", ["TP Filing", "CTM Filing"], key="main_service")
 uploaded_file = st.file_uploader(f"Upload Excel File", type="xlsx")
@@ -77,7 +73,7 @@ if uploaded_file:
 
         st.info(f"Automatically selected sheet: **{selected_sheet}**")
         
-        # dtype=str added here to prevent 'inf' errors during initial load
+        # dtype=str prevents scientific notation/inf issues shuru se hi
         df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, header=header_idx, dtype=str)
         df.columns = df.columns.str.strip()
         df = df.dropna(how='all')
@@ -91,12 +87,10 @@ if uploaded_file:
             job_col = 'JOB NO.' if 'JOB NO.' in df.columns else 'JOB NO. '
             if job_col in df.columns:
                 df[job_col] = df[job_col].ffill()
-                for job_id, group in df.groupby(job_col):
+                # sort=False ensures files follow the Excel sequence
+                for job_id, group in df.groupby(job_col, sort=False):
                     first_row = group.iloc[0]
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "").replace(".0", "")
-                    
-                    # Targeting 'BY AIR FLIGHT NO' strictly
-                    flight_no = clean_flight(first_row.get('BY AIR FLIGHT NO', ''))
                     
                     tp_template = {
                         "webFormId": "", "webFormTypeId": "24", "icegateId": "INDIGOCARGO",
@@ -110,7 +104,7 @@ if uploaded_file:
                             "transhipment_Agency_Code": "6E", 
                             "gateway_Custodian_Code": clean_val(first_row.get('CUSTODIAN CODE', 'INCCU4AAI1')),
                             "mode_Transport": "A", "airline_Code": "6E", "carrier_Code": "AABCI2726B",
-                            "flight_Number": flight_no,
+                            "flight_Number": clean_flight(first_row.get('BY AIR FLIGHT NO', '')),
                             "flight_Date": format_date(first_row.get('FLIGHT DATE')), "bond_Port": clean_val(first_row.get('BOND PORT', 'INCCU4'))
                         },
                         "atsStep2": { "lineDetails": [], "truckDetails": [] }
@@ -140,7 +134,8 @@ if uploaded_file:
                 df['IGM'] = df['IGM'].ffill()
                 ctm_counter = 1
                 
-                for (mawb_val, igm_val), group in df.groupby(group_cols):
+                # sort=False stops alphabetical sorting, keeps Excel order
+                for (mawb_val, igm_val), group in df.groupby(group_cols, sort=False):
                     first_row = group.iloc[0]
                     dest_formatted = format_destination(first_row.get('DESTINATION', ''))
                     mawb_clean = format_mawb(mawb_val)
@@ -149,6 +144,8 @@ if uploaded_file:
                     
                     ctm_template = {
                         "webFormId": "", "webFormTypeId": "21", "icegateId": "INDIGOCARGO",
+                        "thumbPrint": "15 58 d8 6a 4e 61 5a e3 32 2c 5c 78 4a 3e d4 4e 09 0e 6a 76",
+                        "serialNumber": "0a 8e 97 45 d6 5d",
                         "roleId": 7, "url": "igm-egm/ctm-webform",
                         "freshCTMStep1": {
                             "messageType": "F", 
@@ -181,7 +178,7 @@ if uploaded_file:
                     zip_file.writestr(f_name, content)
             
             st.divider()
-            st.success(f"Success! Generated {len(json_files)} files.")
+            st.success(f"Generated {len(json_files)} files in correct order.")
             st.download_button(
                 label=f"📥 DOWNLOAD {service.upper()} ZIP",
                 data=zip_buffer.getvalue(),
