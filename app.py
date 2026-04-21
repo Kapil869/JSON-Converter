@@ -3,9 +3,9 @@ import pandas as pd
 import json
 import io
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
-st.set_page_config(page_title="Logistics JSON", layout="wide")
+st.set_page_config(page_title="Logistics JSON Master Suite", layout="wide")
 
 # --- Helper Functions ---
 def format_date(date_val):
@@ -18,7 +18,8 @@ def format_date(date_val):
         return ""
 
 def clean_val(val):
-    if pd.isna(val) or str(val).strip() == "":
+    """Replaces 'nan' with empty string and cleans decimals."""
+    if pd.isna(val) or str(val).strip().lower() == "nan" or str(val).strip() == "":
         return ""
     s = str(val).strip()
     if "/" in s:
@@ -28,7 +29,8 @@ def clean_val(val):
     return s
 
 def clean_flight(val):
-    if pd.isna(val): 
+    """Fixes 'inf' and 'nan' issue for flight numbers."""
+    if pd.isna(val) or str(val).strip().lower() == "nan": 
         return ""
     s = str(val).strip()
     if s.lower() == "inf":
@@ -39,17 +41,20 @@ def clean_flight(val):
     return s
 
 def format_mawb(val):
+    if pd.isna(val) or str(val).strip().lower() == "nan":
+        return ""
     return str(val).replace("-", "").replace(" ", "").replace(".0", "")
 
 def format_destination(val):
+    """Wraps destination with IN and 4 (e.g., DEL -> INDEL4)"""
     dest = str(val).strip().upper()
-    if not dest: return ""
+    if not dest or dest.lower() == "nan": return ""
     if not dest.startswith("IN"): dest = "IN" + dest
     if not dest.endswith("4"): dest = dest + "4"
     return dest
 
 # --- UI Layout ---
-st.title("📦 JSON Converter CTM TP ")
+st.title("📦 JSON Conveter TP and CTM ")
 
 service = st.selectbox("What do you want to process?", ["TP Filing", "CTM Filing"], key="main_service")
 uploaded_file = st.file_uploader(f"Upload Excel File", type="xlsx")
@@ -73,7 +78,6 @@ if uploaded_file:
 
         st.info(f"Automatically selected sheet: **{selected_sheet}**")
         
-        # dtype=str prevents scientific notation/inf issues shuru se hi
         df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, header=header_idx, dtype=str)
         df.columns = df.columns.str.strip()
         df = df.dropna(how='all')
@@ -87,8 +91,9 @@ if uploaded_file:
             job_col = 'JOB NO.' if 'JOB NO.' in df.columns else 'JOB NO. '
             if job_col in df.columns:
                 df[job_col] = df[job_col].ffill()
-                # sort=False ensures files follow the Excel sequence
                 for job_id, group in df.groupby(job_col, sort=False):
+                    if pd.isna(job_id) or str(job_id).strip().lower() == "nan": continue
+                    
                     first_row = group.iloc[0]
                     clean_id = str(job_id).replace("SINGLE ", "").replace(" ", "").replace(".0", "")
                     
@@ -111,11 +116,13 @@ if uploaded_file:
                     }
                     for _, row in group.iterrows():
                         mawb = format_mawb(row.get('MAWB NO', ''))
+                        if not mawb: continue
+                        
                         tp_template["atsStep2"]["lineDetails"].append({
                             "cargo_Transfer_Manifestno": clean_val(row.get('CTM NO')),
                             "cargo_Transfer_Manifestdate": format_date(row.get('CTM DATE')),
                             "masterAirway_Bill_Number": mawb, "houseAirway_Bill_Number": "",
-                            "consignment_Value_INR": clean_val(row.get('VALUE', 0))
+                            "consignment_Value_INR": clean_val(row.get('VALUE', ""))
                         })
                         tp_template["atsStep2"]["truckDetails"].append({
                             "masterAirway_Bill_Number": mawb, "houseAirway_Bill_Number": "",
@@ -134,8 +141,9 @@ if uploaded_file:
                 df['IGM'] = df['IGM'].ffill()
                 ctm_counter = 1
                 
-                # sort=False stops alphabetical sorting, keeps Excel order
                 for (mawb_val, igm_val), group in df.groupby(group_cols, sort=False):
+                    if pd.isna(mawb_val) or str(mawb_val).strip().lower() == "nan": continue
+                    
                     first_row = group.iloc[0]
                     dest_formatted = format_destination(first_row.get('DESTINATION', ''))
                     mawb_clean = format_mawb(mawb_val)
@@ -171,14 +179,22 @@ if uploaded_file:
                     json_files[f"{file_name_label}.json"] = json.dumps(ctm_template, indent=2)
                     ctm_counter += 1
 
+        # --- Generate ZIP with IST Timestamps ---
         if json_files:
             zip_buffer = io.BytesIO()
+            # Indian Standard Time (UTC + 5:30)
+            ist = timezone(timedelta(hours=5, minutes=30))
+            now = datetime.now(ist)
+            zip_time = (now.year, now.month, now.day, now.hour, now.minute, now.second)
+
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for f_name, content in json_files.items():
-                    zip_file.writestr(f_name, content)
+                    # Manually creating ZipInfo to set IST time
+                    info = zipfile.ZipInfo(f_name, date_time=zip_time)
+                    zip_file.writestr(info, content)
             
             st.divider()
-            st.success(f"Generated {len(json_files)} files in correct order.")
+            st.success(f"Success! Generated {len(json_files)} files with IST timestamps.")
             st.download_button(
                 label=f"📥 DOWNLOAD {service.upper()} ZIP",
                 data=zip_buffer.getvalue(),
